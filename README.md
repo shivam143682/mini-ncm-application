@@ -1,55 +1,51 @@
 # Mini NCM Application (Cisco IOS Compliance Platform)
 
-A production-ready Python application that **parses Cisco IOS configurations**, **evaluates compliance** against security best-practices, and **stores results in PostgreSQL** — all served through a **FastAPI REST API** running in **Docker**.
+This is a small backend project I built to parse Cisco IOS configuration files, check them against a set of security best practices, and store the results in a database. Everything runs behind a FastAPI service, and the whole thing is containerized with Docker so it's easy to spin up anywhere.
 
----
+## What it actually does
 
-## Architecture
+You feed it a raw Cisco IOS config (as text), and it:
 
-```
-┌──────────────────────────────────────────────────────────────────┐
-│  Docker Compose                                                  │
-│                                                                  │
-│  ┌─────────────────────┐      ┌──────────────────────────────┐  │
-│  │   FastAPI (api)     │      │   PostgreSQL 16 (postgres)   │  │
-│  │   port 8000         │─────▶│   port 5432 (internal)       │  │
-│  │                     │      │   volume: pgdata             │  │
-│  │  app/               │      └──────────────────────────────┘  │
-│  │  ├── parser/        │                                        │
-│  │  │   └── ios_parser │  (Cisco IOS parser)                    │
-│  │  ├── compliance/    │                                        │
-│  │  │   └── engine     │  (8 security rules)                    │
-│  │  ├── models         │  (SQLAlchemy ORM)                      │
-│  │  ├── service        │  (orchestrator)                        │
-│  │  ├── router         │  (7 API endpoints)                     │
-│  │  └── main           │  (FastAPI app)                         │
-│  └─────────────────────┘                                        │
-└──────────────────────────────────────────────────────────────────┘
-```
+1. Parses the config into structured data (interfaces, routing, ACLs, AAA, etc.)
+2. Runs it through a compliance engine that checks it against 8 security rules
+3. Saves both the parsed config and the compliance report to PostgreSQL
+4. Gives you all of this back through a REST API
 
----
+## How it's put together
 
-## Quick Start
+Two containers, wired together with Docker Compose:
 
-### Prerequisites
-- **Docker Desktop** installed and running
+- **api** — the FastAPI app, listening on port 8000
+- **postgres** — Postgres 16, keeping data in a named volume so it survives restarts
 
-### 1. Start the stack
+Inside the API container, the code is split roughly like this:
+
+- `parser/` — the actual Cisco IOS parser
+- `compliance/` — the rule engine (8 rules right now)
+- `models.py` — SQLAlchemy ORM models
+- `service.py` — the layer that ties parsing + compliance + DB together
+- `router.py` — the API routes
+- `main.py` — where the FastAPI app gets created
+
+## Getting it running
+
+You just need Docker Desktop installed.
 
 ```bash
 docker compose up --build
 ```
 
-The first run builds the image and starts both services.
-PostgreSQL tables are created automatically on first boot.
+First run will build the image and bring both containers up. Tables get created automatically the first time Postgres boots — there's no separate migration step to run.
 
-### 2. Open Swagger UI
+Once it's up, the interactive docs are at:
 
 ```
 http://localhost:8000/docs
 ```
 
-### 3. Parse your first config (Bash / Linux / macOS)
+### Trying it out
+
+Here's a quick example of sending a config in on Linux/macOS:
 
 ```bash
 curl -X POST http://localhost:8000/api/v1/parse \
@@ -60,7 +56,7 @@ curl -X POST http://localhost:8000/api/v1/parse \
   }'
 ```
 
-### 3b. Parse your first config (PowerShell / Windows)
+And the same thing from PowerShell, if you're on Windows:
 
 ```powershell
 $body = @{
@@ -72,21 +68,17 @@ Invoke-RestMethod -Method Post -Uri "http://localhost:8000/api/v1/parse" `
     -ContentType "application/json" -Body $body
 ```
 
----
-
 ## Python SDK
 
-A **Python client module** is included in the `sdk/` directory for programmatic interaction:
+There's a small client wrapper in `sdk/` if you'd rather not hit the API with raw HTTP calls:
 
 ```python
 from sdk import CiscoComplianceClient
 
 client = CiscoComplianceClient(base_url="http://localhost:8000")
 
-# Health check
 print(client.health_check())
 
-# Parse and evaluate a config
 result = client.parse_config(
     config_text=open("examples/sample_config.ios").read(),
     device_name="Core-Router-01",
@@ -94,137 +86,111 @@ result = client.parse_config(
 print(f"Score: {result['report']['score']}")
 print(f"Compliant: {result['report']['is_compliant']}")
 
-# List all configs
 for cfg in client.list_configs():
     print(f"{cfg['device_name']} — {cfg['raw_lines']} lines")
 
-# List compliance reports
 for rpt in client.list_reports():
     print(f"Score: {rpt['score']}, Compliant: {rpt['is_compliant']}")
 ```
 
-### Run the demo script
+To run the included demo (with the API already up):
 
 ```bash
-# Install SDK dependency
 pip install requests
-
-# Run the demo (API must be running)
 python examples/demo.py
 ```
 
----
+## API endpoints
 
-## API Reference
+| Method   | Endpoint                             | What it does                          |
+|----------|---------------------------------------|----------------------------------------|
+| POST     | `/api/v1/parse`                       | Parses a config, runs compliance, saves both |
+| GET      | `/api/v1/configs`                     | Lists all stored device configs        |
+| GET      | `/api/v1/configs/{id}`                | Returns a config with its full parsed data |
+| DELETE   | `/api/v1/configs/{id}`                | Deletes a config and its report        |
+| GET      | `/api/v1/reports`                     | Lists all compliance reports           |
+| GET      | `/api/v1/reports/{id}`                | Returns one specific report            |
+| GET      | `/api/v1/reports/by-config/{id}`      | Returns the report tied to a config    |
+| GET      | `/health`                             | Basic API + DB health check            |
 
-| Method   | Endpoint                             | Description                          |
-|----------|--------------------------------------|--------------------------------------|
-| `POST`   | `/api/v1/parse`                      | **Parse config + compliance + store**|
-| `GET`    | `/api/v1/configs`                    | List all device configs              |
-| `GET`    | `/api/v1/configs/{id}`               | Get config with full parsed data     |
-| `DELETE` | `/api/v1/configs/{id}`               | Delete config and its report         |
-| `GET`    | `/api/v1/reports`                    | List all compliance reports          |
-| `GET`    | `/api/v1/reports/{id}`               | Get a specific compliance report     |
-| `GET`    | `/api/v1/reports/by-config/{id}`     | Get report for a config              |
-| `GET`    | `/health`                            | API + DB health check                |
+List endpoints support pagination through `?skip=` and `?limit=`, e.g. `/api/v1/configs?skip=0&limit=50`.
 
-### Pagination
+## The 8 compliance rules
 
-```
-GET /api/v1/configs?skip=0&limit=50
-GET /api/v1/reports?skip=0&limit=50
-```
+| Rule    | Checks for                                      | Severity |
+|---------|--------------------------------------------------|----------|
+| SEC-001 | `service password-encryption` is enabled          | High     |
+| SEC-002 | No SNMP community left as `public`/`private`      | High     |
+| SEC-003 | SSH is on, telnet isn't allowed on VTY lines       | High     |
+| SEC-004 | At least one NTP server is configured             | Medium   |
+| SEC-005 | A Loopback0 interface exists                      | Low      |
+| SEC-006 | Every active interface has a description          | Low      |
+| SEC-007 | A banner MOTD is set                              | Medium   |
+| SEC-008 | AAA new-model is configured                       | High     |
 
----
+Scoring is weighted — High = 3 points, Medium = 2, Low = 1. The score is just (points passed / total possible points) × 100, and a config counts as compliant once it hits 80 or above.
 
-## Compliance Rules
+## What the parser can read
 
-| Rule ID | Description                                    | Severity     |
-|---------|------------------------------------------------|--------------|
-| SEC-001 | `service password-encryption` must be enabled  | 🔴 HIGH      |
-| SEC-002 | No SNMP community `public` or `private`        | 🔴 HIGH      |
-| SEC-003 | SSH enabled, telnet not allowed on VTY          | 🔴 HIGH      |
-| SEC-004 | At least one NTP server configured              | 🟡 MEDIUM    |
-| SEC-005 | Loopback0 interface must exist                  | 🟢 LOW       |
-| SEC-006 | All active interfaces must have description     | 🟢 LOW       |
-| SEC-007 | Banner MOTD must be configured                  | 🟡 MEDIUM    |
-| SEC-008 | AAA new-model must be configured                | 🔴 HIGH      |
+Right now the parser pulls out:
 
-### Scoring
+- Hostname and domain name
+- Interfaces — IP, mask, description, shutdown state, duplex/speed
+- Static routes, including next-hop and admin distance
+- OSPF (process ID, router ID, networks, passive interfaces)
+- BGP (ASN, router ID, neighbors, networks)
+- ACLs — standard, extended, and named, with their entries
+- SNMP community strings and access types
+- NTP servers, including the `prefer` flag
+- AAA settings (new-model, authentication, authorization)
+- VTY/CON line settings (transport, login, exec-timeout)
+- Banner MOTD, including delimiter handling
+- Security basics like password encryption, enable secret, SSH version
 
-- **Weighted**: HIGH = 3 pts, MEDIUM = 2 pts, LOW = 1 pt
-- **Score** = (sum of passed weights / total weights) × 100
-- **Compliant** = `true` when score ≥ 80
-
----
-
-## Parser Capabilities
-
-The `CiscoIOSParser` extracts:
-
-| Feature | Details |
-|---------|---------|
-| Hostname & domain | `hostname`, `ip domain-name` |
-| Interfaces | IP, mask, description, shutdown, duplex, speed |
-| Static routes | Network, mask, next-hop, admin distance |
-| OSPF | Process ID, router-ID, networks, passive interfaces |
-| BGP | ASN, router-ID, neighbors, networks |
-| ACLs | Standard, extended, named (with entries) |
-| SNMP | Community strings and access types |
-| NTP | Servers with prefer flag |
-| AAA | new-model, authentication, authorization |
-| Lines | VTY/CON transport, login, exec-timeout |
-| Banner | MOTD with delimiter support |
-| Security | Password encryption, enable secret, SSH version |
-
----
-
-## Project Structure
+## Project layout
 
 ```
 cisco-ios-parser/
 ├── app/
 │   ├── __init__.py
-│   ├── main.py              ← FastAPI app entry point
-│   ├── database.py          ← Async SQLAlchemy engine + session
-│   ├── models.py            ← ORM: DeviceConfig, ComplianceReport
-│   ├── schemas.py           ← Pydantic v2 request/response models
-│   ├── router.py            ← All API routes (/api/v1/*)
-│   ├── service.py           ← Business logic orchestrator
+│   ├── main.py              # FastAPI app entry point
+│   ├── database.py          # Async SQLAlchemy engine + session
+│   ├── models.py            # ORM: DeviceConfig, ComplianceReport
+│   ├── schemas.py           # Pydantic v2 request/response models
+│   ├── router.py            # All API routes (/api/v1/*)
+│   ├── service.py           # Business logic orchestrator
 │   ├── parser/
 │   │   ├── __init__.py
-│   │   └── ios_parser.py    ← Cisco IOS parser (pure Python)
+│   │   └── ios_parser.py    # Cisco IOS parser (pure Python)
 │   └── compliance/
 │       ├── __init__.py
-│       └── engine.py        ← 8-rule compliance engine
+│       └── engine.py        # 8-rule compliance engine
 ├── sdk/
 │   ├── __init__.py
-│   └── client.py            ← Python SDK client
+│   └── client.py            # Python SDK client
 ├── examples/
-│   ├── sample_config.ios    ← Sample Cisco IOS config
-│   └── demo.py              ← End-to-end demo script
+│   ├── sample_config.ios    # Sample Cisco IOS config
+│   └── demo.py              # End-to-end demo script
 ├── tests/
-│   └── test_parser.py       ← Unit tests for parser & engine
-├── Dockerfile               ← Multi-stage, non-root
-├── docker-compose.yml       ← api + postgres with healthchecks
-├── requirements.txt         ← Python dependencies
-├── .env                     ← Environment variables
+│   └── test_parser.py       # Unit tests for parser & engine
+├── Dockerfile                # Multi-stage, non-root
+├── docker-compose.yml        # api + postgres with healthchecks
+├── requirements.txt
+├── .env
 ├── .gitignore
 └── README.md
 ```
 
----
+## Running the tests
 
-## Testing
-
-### Unit Tests (no Docker needed)
+Unit tests don't need Docker at all:
 
 ```bash
 pip install pytest
 python -m pytest tests/ -v
 ```
 
-### Integration Test (Docker)
+For a fuller integration check, bring the stack up and run the demo script against it:
 
 ```bash
 docker compose up --build -d
@@ -232,9 +198,7 @@ pip install requests
 python examples/demo.py
 ```
 
----
-
-## Useful Commands
+## Commands I keep coming back to
 
 ```bash
 # Start (build if needed)
@@ -243,32 +207,30 @@ docker compose up --build
 # Start in background
 docker compose up -d --build
 
-# View logs
+# Tail logs
 docker compose logs -f api
 docker compose logs -f postgres
 
 # Stop
 docker compose down
 
-# Stop and wipe DB data
+# Stop and also wipe the DB volume
 docker compose down -v
 
-# Rebuild only the API image
+# Rebuild just the API image
 docker compose build api
 
-# Check health
+# Quick health check
 curl http://localhost:8000/health
 ```
 
----
-
 ## Database
 
-Tables are created automatically on startup — no migrations needed.
+No migrations to run — tables are created automatically the first time the app starts up.
 
-| Table | Description |
-|-------|-------------|
-| `device_configs` | Raw config text + parsed JSON + metadata |
-| `compliance_reports` | Compliance result + score, linked to device config |
+| Table                | What's in it |
+|-----------------------|---------------|
+| `device_configs`       | Raw config text, the parsed JSON, and some metadata |
+| `compliance_reports`   | The compliance result and score, linked back to its device config |
 
-Data is persisted in the Docker named volume `pgdata`.
+Data itself lives in the `pgdata` Docker volume, so it sticks around between restarts unless you explicitly wipe it.
