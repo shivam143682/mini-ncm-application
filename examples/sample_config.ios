@@ -1,0 +1,85 @@
+!
+! ── Cisco IOS Sample Configuration ──
+! Device: Core-Router-01
+! Purpose: Demo config for the Cisco IOS Compliance Platform
+!
+version 15.7
+service timestamps debug datetime msec
+service timestamps log datetime msec
+service password-encryption
+!
+hostname Core-Router-01
+!
+enable secret 5 $1$abc$XYZ123hashedpassword
+!
+aaa new-model
+aaa authentication login default local
+aaa authorization exec default local
+!
+ip domain-name corp.local
+ip ssh version 2
+ip ssh time-out 60
+!
+interface Loopback0
+ description Router-ID Loopback
+ ip address 10.255.0.1 255.255.255.255
+!
+interface GigabitEthernet0/0
+ description WAN Uplink to ISP
+ ip address 203.0.113.1 255.255.255.252
+ duplex auto
+ speed auto
+!
+interface GigabitEthernet0/1
+ description LAN - Server VLAN
+ ip address 10.1.0.1 255.255.255.0
+ duplex full
+ speed 1000
+!
+interface GigabitEthernet0/2
+ description LAN - User VLAN
+ ip address 10.2.0.1 255.255.255.0
+!
+interface GigabitEthernet0/3
+ shutdown
+!
+router ospf 1
+ router-id 10.255.0.1
+ network 10.0.0.0 0.255.255.255 area 0
+ network 203.0.113.0 0.0.0.3 area 0
+ passive-interface GigabitEthernet0/2
+!
+ip route 0.0.0.0 0.0.0.0 203.0.113.2
+ip route 172.16.0.0 255.240.0.0 10.1.0.254 100
+!
+access-list 10 permit 10.1.0.0 0.0.0.255
+access-list 10 permit 10.2.0.0 0.0.0.255
+access-list 10 deny any
+!
+ip access-list extended BLOCK_TELNET
+ 10 deny tcp any any eq 23
+ 20 permit ip any any
+!
+snmp-server community MyStr0ngStr RO 10
+snmp-server community NetMgmt99 RW
+!
+ntp server 10.0.0.1 prefer
+ntp server 10.0.0.2
+!
+banner motd ^Authorised access only. Unauthorised access is prohibited and will be prosecuted.^
+!
+line con 0
+ login local
+ exec-timeout 5 0
+!
+line vty 0 4
+ login local
+ transport input ssh
+ exec-timeout 10 0
+!
+line vty 5 15
+ login local
+ transport input ssh
+ exec-timeout 10 0
+!
+end
